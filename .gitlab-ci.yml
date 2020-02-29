@@ -1,0 +1,113 @@
+# This is a sample configuration file that I have used from a Udemy course by Velentin Despa.
+# Main take aways from here is that the 'stages' section determines the order of the pipeline jobs.
+# Job with a '.' at the beginning is not considered for evaluation. Comments start with '#'.
+# Dynamically environments can be spawned and could be taken down - useful during early access testing for
+#             key users, testers, developers and product owners.
+# 'only' keyword dictates when the job is applicable - to master or during merge_requests.
+# 'when' introduces the human involvement factor - say during the deployment to production, the UAT is to be done by users.
+
+image: node
+
+stages:
+  - build
+  - test
+  - deploy review
+  - deploy staging
+  - deploy production
+
+variables:
+  STAGING_DOMAIN: rapido-staging.surge.sh
+  PRODUCTION_DOMAIN: rapido.surge.sh
+
+cache:
+  key: ${CI_COMMIT_REF_SLUG}
+  paths:
+    - node_modules/
+   
+build website:
+  stage: build
+  only:
+    - master
+    - merge_requests
+  script:
+    - echo $CI_COMMIT_SHA
+    - npm install
+    - npm install -g gatsby-cli
+    - gatsby build
+    - sed -i "s/%%_version%%/$CI_COMMIT_SHORT_SHA/" ./public/index.html
+  artifacts:
+    paths:
+      - ./public
+
+test artifact:
+  image: alpine
+  only:
+    - master
+    - merge_requests
+  stage: test
+  script:
+    - grep -q "Gatsby" ./public/index.html
+
+test website:
+  stage: test
+  only:
+    - master
+    - merge_requests
+  script:    
+    - npm install
+    - npm install -g gatsby-cli
+    - gatsby serve &
+    - sleep 3
+    - curl "http://localhost:9000" | tac | tac | grep -q "Gatsby"
+
+deploy review:
+  stage: deploy review
+  environment:
+    name: review/featurex
+    url: http://rapido-featurex.surge.sh
+    on_stop: stop review
+  only:
+    - merge_requests
+  script:
+    - npm install --global surge
+    - surge --project ./public --domain rapido-featurex.surge.sh
+
+stop review:
+  stage: deploy review
+  only:
+    - merge_requests
+  variables:
+    GIT_STRATEGY: none
+  script:
+    - npm install --global surge
+    - surge teardown rapido-featurex.surge.sh
+  when: manual
+  environment:
+    name: review/featurex
+    action: stop
+
+.deploy template: &deploy
+  only:
+    - master
+  script:
+    - npm install --global surge
+    - surge --project ./public --domain $DOMAIN
+  environment:
+    url: http://$STAGING_DOMAIN
+    
+deploy staging:
+  <<: *deploy
+  stage: deploy staging
+  variables:
+    DOMAIN: $STAGING_DOMAIN
+  environment:
+    name: staging
+
+deploy production:
+  <<: *deploy
+  stage: deploy production
+  variables:
+    DOMAIN: $PRODUCTION_DOMAIN
+  when: manual
+  environment:
+    name: production
